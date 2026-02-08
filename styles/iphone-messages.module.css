@@ -1,0 +1,308 @@
+/* iPhone Messages section – precise layout to prevent jitter */
+
+/* When pinned: center content in viewport below nav (h-16 = 4rem). */
+.section {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.section::before {
+  content: "";
+  height: 4rem;
+  flex-shrink: 0;
+}
+
+.inner {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  align-items: center;
+  justify-items: center;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .inner {
+    grid-template-columns: 1fr 1fr;
+    padding: 3rem 2rem;
+  }
+}
+
+/* Phone wrapper: fixed aspect ratio, no layout shift */
+.phoneWrap {
+  position: relative;
+  width: 100%;
+  max-width: 300px;
+  aspect-ratio: 9 / 19;
+  max-height: min(85vh, 620px);
+  will-change: transform;
+}
+
+/* Thin bezel, big rounded corners, pure black + tiny highlight, Rid-style */
+.phoneFrame {
+  position: absolute;
+  inset: 0;
+  border-radius: 46px;
+  background: #0b0b0c;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.22),
+    0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.phoneFrame::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 46px;
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@media (min-width: 640px) {
+  .phoneFrame {
+    padding: 5px;
+  }
+}
+
+/* Notch: hugs top, overlaps screen, flat top / rounded bottom */
+.dynamicIsland {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 28px;
+  border-radius: 0 0 12px 12px;
+  background: #000;
+  z-index: 20;
+  pointer-events: none;
+}
+
+/* Screen radius tracks frame (56px - padding), borderless inside bezel */
+.screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 40px;
+  background: #fff;
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .screen {
+    border-radius: 40px; /* 56 - 10 */
+  }
+}
+
+.viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  will-change: transform;
+}
+
+.statusBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 6px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 500;
+  color: #000;
+}
+
+@media (min-width: 640px) {
+  .statusBar {
+    padding: 14px 18px 6px;
+  }
+}
+
+.header {
+  flex-shrink: 0;
+  padding: 6px 12px 12px;
+  text-align: center;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.headerTitle {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: #000;
+}
+
+.headerSub {
+  font-size: 0.625rem;
+  color: #71717a;
+}
+
+/* Conversation area: fixed height, overflow hidden, content scrolls via translateY */
+.messagesViewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.messagesContent {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding: 0.75rem 0.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  will-change: transform;
+}
+
+.bubble {
+  max-width: 88%;
+  padding: 0.5rem 0.625rem;
+  border-radius: 1.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  will-change: transform, opacity;
+  opacity: 0;
+}
+
+.bubbleUser {
+  align-self: flex-end;
+  border-bottom-right-radius: 0.25rem;
+  background: #007aff;
+  color: #fff;
+  transform: translateX(24px);
+}
+
+.bubbleAgent {
+  align-self: flex-start;
+  border-bottom-left-radius: 0.25rem;
+  background: #efefef;
+  color: #111;
+  transform: translateX(-24px);
+}
+
+/* Image fills entire bubble, no blue border (iPhone-style) */
+.bubbleImage {
+  padding: 0;
+  overflow: hidden;
+}
+
+.bubbleImageInner {
+  width: 100%;
+  min-width: 8rem;
+  aspect-ratio: 4/3;
+  border-radius: 1.25rem;
+  overflow: hidden;
+  display: block;
+  position: relative;
+}
+
+.bubbleUser.bubbleImage .bubbleImageInner {
+  border-bottom-right-radius: 0.25rem;
+}
+
+.bubbleAgent.bubbleImage .bubbleImageInner {
+  border-bottom-left-radius: 0.25rem;
+}
+
+.typing {
+  align-self: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-radius: 1.25rem;
+  border-bottom-left-radius: 0.25rem;
+  background: #efefef;
+  will-change: opacity;
+  opacity: 0;
+}
+
+.typingDots {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.typingDots span {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: #71717a;
+}
+
+/* Copy column (headline + body per step) – stretch to full grid cell so text doesn’t compress */
+.copyColumn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 1rem 0;
+  min-height: 180px;
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.copyStep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 1rem 0;
+  will-change: opacity, transform;
+  pointer-events: none;
+}
+
+.copyStepHeadline {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--fg, #fafafa);
+  margin-bottom: 0.5rem;
+}
+
+.copyStepBody {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--fg-muted, #a1a1aa);
+}
+
+/* Debug */
+.debugOutline .messagesViewport {
+  outline: 2px dashed rgba(59, 130, 246, 0.6);
+}
+
+.debugOutline .bubble {
+  outline: 1px solid rgba(34, 197, 94, 0.6);
+}
+
+.debugProgress {
+  position: fixed;
+  top: 4rem;
+  right: 1rem;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-family: monospace;
+}
