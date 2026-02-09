@@ -14,3 +14,16 @@ create table if not exists sms_conversations (
 );
 
 create index if not exists sms_conversations_phone_number on sms_conversations(phone_number);
+
+-- Simple message log for conversational context.
+create table if not exists sms_messages (
+  id uuid primary key default gen_random_uuid(),
+  phone_number text not null,
+  direction text not null check (direction in ('in', 'out')),
+  body text not null,
+  media_urls jsonb default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists sms_messages_phone_number_created_at
+  on sms_messages(phone_number, created_at desc);

@@ -65,6 +65,44 @@ type ModelResponse = {
 
 const OPENAI_MODEL = "gpt-4o-mini";
 
+async function fetchTwilioImageAsDataUrl(
+  url: string
+): Promise<string | null> {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+
+  if (!accountSid || !authToken) {
+    return null;
+  }
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(
+          `${accountSid}:${authToken}`
+        ).toString("base64")}`,
+      },
+    });
+
+    if (!res.ok) {
+      console.error(
+        "[conversation] Failed to fetch Twilio media",
+        res.status,
+        await res.text()
+      );
+      return null;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "image/jpeg";
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch (e) {
+    console.error("[conversation] Error fetching Twilio media:", e);
+    return null;
+  }
+}
+
 function coerceStringArray(v: unknown): string[] {
   if (Array.isArray(v)) {
     return (v as unknown[])
@@ -220,6 +258,28 @@ export async function processInboundMessage(
   const previousListingState: ListingState =
     (row?.listing_state as ListingState | null) ?? {};
 
+  // Log inbound message for context.
+  await supabase.from("sms_messages").insert({
+    phone_number: from,
+    direction: "in",
+    body,
+    media_urls: mediaUrls,
+  });
+
+  // Fetch recent messages (including this one) for the model.
+  const { data: recentMsgsRaw } = await supabase
+    .from("sms_messages")
+    .select("direction, body")
+    .eq("phone_number", from)
+    .order("created_at", { ascending: false })
+    .limit(8);
+
+  const recentMessages =
+    (recentMsgsRaw ?? []).slice().reverse() as {
+      direction: string;
+      body: string;
+    }[];
+
   const normalizedBody = normalizeBody(body);
   const hasUsableText = normalizedBody.length >= 10;
   const hasAnyPhotos = mergedPhotos.length > 0;
@@ -254,6 +314,21 @@ export async function processInboundMessage(
     };
   }
 
+  // Simple deterministic stage control.
+  const hasItemTitle = !!previousListingState.itemTitle;
+  const hasCondition = !!previousListingState.condition;
+
+  let stage: "awaiting_item" | "awaiting_photos_or_desc" | "awaiting_condition" | "finalize";
+  if (!hasItemTitle) {
+    stage = "awaiting_item";
+  } else if (!hasAnyPhotos && !hasCondition) {
+    stage = "awaiting_photos_or_desc";
+  } else if (!hasCondition) {
+    stage = "awaiting_condition";
+  } else {
+    stage = "finalize";
+  }
+
   const systemPrompt = `
 You are a listing assistant helping a human sell a single item on marketplaces like eBay, Facebook Marketplace, and similar sites.
 
@@ -274,8 +349,6 @@ Information you should aim to capture in \`listing_state\`:
   - includedAccessories (things included: box, charger, cables, etc.)
   - missingAccessories (things typically included but missing, if any)
   - defects (visible damage, marks, issues)
-- Photos:
-  - photos: array of URLs (we pass them in metadata; you can't see the pixels, but you know how many there are)
 - Marketplace-ready output:
   - marketplaceSummary.ebay:
     - title: final eBay-ready title (max ~80 chars, important keywords first)
@@ -284,9 +357,16 @@ Information you should aim to capture in \`listing_state\`:
     - itemSpecifics: key–value map of structured attributes (Brand, Model, Size, Color, Style, Type, Condition, etc.)
 
 Conversation behavior:
-- If you don't have any photos yet, you may ask the user to send **one or more photos _or_ a quick description** of the item.
-- If the user clearly prefers not to send photos (or keeps replying with text only), **do not keep repeating the same photo request**. Continue the flow using whatever information you have.
-- When you have at least one photo URL, infer what you reasonably can (item type, style, etc.) from context and user text; don't ask for every detail if you can reasonably guess or leave it unspecified.
+- You are given:
+  - \`stage\`: one of "awaiting_item", "awaiting_photos_or_desc", "awaiting_condition", "finalize".
+  - \`recent_messages\`: last few inbound/outbound SMS/WhatsApp messages.
+  - \`previous_listing_state\`: the structured fields already gathered so far.
+  - Zero or more product photos (image inputs).
+- Follow this stage logic strictly:
+  - awaiting_item: The only acceptable open question is some variation of "What are you selling?" (but **only** if we truly don't already know the item).
+  - awaiting_photos_or_desc: Ask for **either** 1–3 photos **or** a short description of condition + brand/model; do not ask about the basic item again.
+  - awaiting_condition: Ask only about condition (like new / good / fair) or one clarifying yes/no about defects.
+  - finalize: Assume you have enough to propose a listing; ask at most one confirmation-style question (e.g. "Want me to finalize this listing?").
 - If the user corrects you (e.g. "it's a lamp, not sneakers"), **immediately trust the correction**, update listing_state, and do not repeat the same mistake.
 - Prefer to **infer** details (brand, condition, defects) from context and previous answers; if you are unsure, pick a **reasonable default** and mark it clearly in \`listing_state\` rather than asking the user for everything.
 - In each reply, ask **at most one short follow-up question**. If you need multiple details, pick the single most important next question.
@@ -319,6 +399,17 @@ Where ListingState is the structure described above.
   let modelReply: ModelResponse;
 
   try {
+    // Optional vision: fetch up to 2 images as data URLs.
+    const imageDataUrls = await Promise.all(
+      mediaUrls.slice(0, 2).map((u) => fetchTwilioImageAsDataUrl(u))
+    );
+    const visionParts = imageDataUrls
+      .filter((u): u is string => !!u)
+      .map((dataUrl) => ({
+        type: "image_url" as const,
+        image_url: { url: dataUrl },
+      }));
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -332,12 +423,28 @@ Where ListingState is the structure described above.
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: JSON.stringify({
-              user_message: body,
-              previous_listing_state: previousListingState,
-              all_photo_urls: mergedPhotos,
-              conversation_notes: previousListingState.conversationNotes ?? "",
-            }),
+            content:
+              visionParts.length === 0
+                ? JSON.stringify({
+                    stage,
+                    user_message: body,
+                    previous_listing_state: previousListingState,
+                    all_photo_urls: mergedPhotos,
+                    recent_messages: recentMessages,
+                  })
+                : [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        stage,
+                        user_message: body,
+                        previous_listing_state: previousListingState,
+                        all_photo_urls: mergedPhotos,
+                        recent_messages: recentMessages,
+                      }),
+                    },
+                    ...visionParts,
+                  ],
           },
         ],
         response_format: { type: "json_object" },
@@ -367,7 +474,7 @@ Where ListingState is the structure described above.
     };
   }
 
-  // Enforce at most one question in the reply.
+  // Enforce at most one question in the reply, and block redundant asks.
   let reply = modelReply.reply_text || "";
   const questionMarks = (reply.match(/\?/g) || []).length;
   if (questionMarks > 1) {
@@ -376,6 +483,19 @@ Where ListingState is the structure described above.
       reply = reply.slice(0, firstIdx + 1).trim();
     }
   }
+
+  // Simple guardrails: if we already know the item or have photos, avoid
+  // asking "what are you selling" or "send photos" again.
+  if (hasItemTitle && /what\s+are\s+you\s+selling/i.test(reply)) {
+    reply =
+      "Got it, I’ll use what I know about the item so far. Is there anything important about its condition I should know?";
+  }
+
+  if (hasAnyPhotos && /send( me)? (some )?(more )?photos|photo of the item/i.test(reply)) {
+    reply =
+      "Thanks for the photos you’ve sent—those are enough for now. If there’s anything unusual about the item’s condition, can you tell me that?";
+  }
+
   modelReply.reply_text = reply;
 
   const listingState: ListingState = mergeListingState(
@@ -391,7 +511,7 @@ Where ListingState is the structure described above.
   await supabase.from("sms_conversations").upsert(
     {
       phone_number: from,
-      stage: listingState.isComplete ? "complete" : "in_progress",
+      stage: listingState.isComplete ? "complete" : stage,
       item_name: listingState.itemTitle ?? row?.item_name ?? null,
       condition: listingState.condition ?? row?.condition ?? null,
       photo_urls: mergedPhotos,
@@ -400,6 +520,14 @@ Where ListingState is the structure described above.
     },
     { onConflict: "phone_number" }
   );
+
+  // Log outbound reply.
+  await supabase.from("sms_messages").insert({
+    phone_number: from,
+    direction: "out",
+    body: reply,
+    media_urls: [],
+  });
 
   return {
     message: reply,
