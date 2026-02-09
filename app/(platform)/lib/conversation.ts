@@ -43,6 +43,10 @@ type ListingState = {
     dimensionsCm?: { length: number; width: number; height: number };
     notes?: string;
   };
+  // Short rolling summary of the conversation so far (last few turns).
+  conversationNotes?: string;
+  // Whether we've already explicitly asked this user for photos at least once.
+  photoRequested?: boolean;
   marketplaceSummary?: {
     ebay?: {
       title: string;
@@ -99,6 +103,100 @@ async function fetchTwilioImageAsDataUrl(
   }
 }
 
+function nonEmptyString(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function mergeListingState(
+  previous: ListingState,
+  next: ListingState,
+  photos: string[],
+  lastUserMessage: string,
+  lastAssistantMessage: string
+): ListingState {
+  const merged: ListingState = {
+    ...previous,
+  };
+
+  const take = <T>(prev: T | undefined, incoming: T | undefined): T | undefined =>
+    incoming !== undefined && incoming !== null ? incoming : prev;
+
+  merged.itemTitle = nonEmptyString(
+    (next.itemTitle as string | undefined) ?? (merged.itemTitle as string | undefined)
+  );
+  merged.categoryPath = nonEmptyString(
+    (next.categoryPath as string | undefined) ?? (merged.categoryPath as string | undefined)
+  );
+  merged.brand = nonEmptyString(
+    (next.brand as string | undefined) ?? (merged.brand as string | undefined)
+  );
+  merged.model = nonEmptyString(
+    (next.model as string | undefined) ?? (merged.model as string | undefined)
+  );
+  merged.size = nonEmptyString(
+    (next.size as string | undefined) ?? (merged.size as string | undefined)
+  );
+  merged.color = nonEmptyString(
+    (next.color as string | undefined) ?? (merged.color as string | undefined)
+  );
+
+  merged.condition = nonEmptyString(
+    (next.condition as string | undefined) ?? (merged.condition as string | undefined)
+  );
+  merged.conditionDetails = nonEmptyString(
+    (next.conditionDetails as string | undefined) ??
+      (merged.conditionDetails as string | undefined)
+  );
+
+  merged.includedAccessories = take(
+    previous.includedAccessories,
+    next.includedAccessories && next.includedAccessories.length > 0
+      ? next.includedAccessories
+      : undefined
+  );
+  merged.missingAccessories = take(
+    previous.missingAccessories,
+    next.missingAccessories && next.missingAccessories.length > 0
+      ? next.missingAccessories
+      : undefined
+  );
+  merged.defects = take(
+    previous.defects,
+    next.defects && next.defects.length > 0 ? next.defects : undefined
+  );
+
+  merged.estimatedPrice = take(previous.estimatedPrice, next.estimatedPrice);
+  merged.comparableListings = take(
+    previous.comparableListings,
+    next.comparableListings && next.comparableListings.length > 0
+      ? next.comparableListings
+      : undefined
+  );
+
+  merged.shipping = take(previous.shipping, next.shipping);
+  merged.marketplaceSummary = take(previous.marketplaceSummary, next.marketplaceSummary);
+
+  merged.isComplete = take(previous.isComplete, next.isComplete);
+
+  // Photos are authoritative from the server-side merge.
+  merged.photos = photos;
+
+  const prevNotes = previous.conversationNotes ?? "";
+  const addition =
+    (lastUserMessage ? `User: ${lastUserMessage}\n` : "") +
+    (lastAssistantMessage ? `Assistant: ${lastAssistantMessage}` : "");
+  const combined = (prevNotes + "\n" + addition).trim();
+  // Keep only the last ~1000 characters to avoid unbounded growth.
+  merged.conversationNotes =
+    combined.length > 1000 ? combined.slice(combined.length - 1000) : combined;
+
+  merged.photoRequested = previous.photoRequested || next.photoRequested || photos.length > 0;
+
+  return merged;
+}
+
 export async function processInboundMessage(
   input: ProcessInput
 ): Promise<ProcessResult> {
@@ -121,6 +219,37 @@ export async function processInboundMessage(
 
   const previousListingState: ListingState =
     (row?.listing_state as ListingState | null) ?? {};
+
+  // Deterministic first-step behavior: if we have no photos yet for this user
+  // and we've never explicitly asked them for photos, send a one-time prompt
+  // without involving the model. This avoids the model getting stuck repeating
+  // the same question.
+  if ((mergedPhotos.length === 0 || mergedPhotos.every((p) => !p)) && !previousListingState.photoRequested) {
+    const listingState: ListingState = {
+      ...previousListingState,
+      photos: mergedPhotos,
+      photoRequested: true,
+    };
+
+    const now = new Date().toISOString();
+    await supabase.from("sms_conversations").upsert(
+      {
+        phone_number: from,
+        stage: "in_progress",
+        item_name: listingState.itemTitle ?? row?.item_name ?? null,
+        condition: listingState.condition ?? row?.condition ?? null,
+        photo_urls: mergedPhotos,
+        listing_state: listingState,
+        updated_at: now,
+      },
+      { onConflict: "phone_number" }
+    );
+
+    return {
+      message:
+        "Great. Send a few photos of the item or a quick description, and I’ll start drafting the listing.",
+    };
+  }
 
   const systemPrompt = `
 You are a listing assistant helping a human sell a single item on marketplaces like eBay, Facebook Marketplace, and similar sites.
@@ -267,11 +396,13 @@ Where ListingState is the structure described above.
     };
   }
 
-  const listingState: ListingState = {
-    ...previousListingState,
-    ...modelReply.listing_state,
-    photos: mergedPhotos,
-  };
+  const listingState: ListingState = mergeListingState(
+    previousListingState,
+    modelReply.listing_state ?? {},
+    mergedPhotos,
+    body,
+    modelReply.reply_text
+  );
 
   // Upsert conversation row with updated structured state
   const now = new Date().toISOString();
