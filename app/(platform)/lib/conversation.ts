@@ -25,6 +25,10 @@ export type ListingState = {
   condition?: string;
   conditionDetails?: string;
   defects?: string[];
+   // Confirmation flags – ONLY the server may set these.
+  itemTitleConfirmed?: boolean;
+  brandConfirmed?: boolean;
+  conditionConfirmed?: boolean;
   [key: string]: unknown;
 };
 
@@ -83,6 +87,14 @@ function mergePatch(
   if (!patch || typeof patch !== "object") return state;
   const out = { ...state };
   for (const [k, v] of Object.entries(patch)) {
+    // LLM is NOT allowed to touch confirmation flags.
+    if (
+      k === "itemTitleConfirmed" ||
+      k === "brandConfirmed" ||
+      k === "conditionConfirmed"
+    ) {
+      continue;
+    }
     if (v !== undefined && v !== null) {
       (out as Record<string, unknown>)[k] = v;
     }
@@ -178,18 +190,6 @@ function userConfirmed(body: string): boolean {
   );
 }
 
-function hasSufficientDescription(
-  state: ListingState,
-  lastBody: string
-): boolean {
-  return (
-    !!state.itemTitle &&
-    (normalizeBody(lastBody).length >= 15 ||
-      !!state.conditionDetails ||
-      !!state.brand)
-  );
-}
-
 export async function processInboundMessage(
   input: ProcessInput
 ): Promise<ProcessResult> {
@@ -205,8 +205,9 @@ export async function processInboundMessage(
   const row = (existing as SmsConversation | null) ?? null;
   const currentPhotos = coerceStringArray(row?.photo_urls as unknown);
   const mergedPhotos = [...currentPhotos, ...mediaUrls].filter(Boolean);
-  let listingState: ListingState =
+  const previousListingState: ListingState =
     (row?.listing_state as ListingState | null) ?? {};
+  let listingState: ListingState = { ...previousListingState };
   let stage: Stage = isStage(row?.stage ?? "")
     ? (row!.stage as Stage)
     : "awaiting_item";
@@ -258,17 +259,51 @@ export async function processInboundMessage(
   // Server owns photos
   listingState.photos = mergedPhotos;
 
+  // Handle explicit confirmations based on user reply.
+  const normBody = normalizeBody(body);
+
+  // Item title confirmation: only when we already had a title before this turn.
+  const hadItemTitleBefore = !!previousListingState.itemTitle;
+  const hasItemTitleNow = !!listingState.itemTitle;
+  if (
+    stage === "awaiting_item" &&
+    hadItemTitleBefore &&
+    hasItemTitleNow &&
+    listingState.itemTitleConfirmed !== true &&
+    normBody.length > 0
+  ) {
+    if (userConfirmed(body)) {
+      listingState.itemTitleConfirmed = true;
+    } else {
+      // Treat reply as correction – replace title and confirm.
+      listingState.itemTitle = body.trim();
+      listingState.itemTitleConfirmed = true;
+    }
+  }
+
+  // Condition confirmation: when in awaiting_condition and we now have a condition
+  // and the user actually replied with something this turn.
+  const hadConditionBefore = !!previousListingState.condition;
+  const hasConditionNow = !!listingState.condition;
+  if (
+    stage === "awaiting_condition" &&
+    hasConditionNow &&
+    listingState.conditionConfirmed !== true &&
+    normBody.length > 0
+  ) {
+    // Either we just extracted condition from this reply, or it was already
+    // present and the user responded again – in both cases treat as confirmed.
+    listingState.conditionConfirmed = true;
+  }
+
   // Advance stage when conditions are met
-  if (stage === "awaiting_item" && listingState.itemTitle) {
+  if (stage === "awaiting_item" && listingState.itemTitleConfirmed) {
     stage = "awaiting_photos";
   }
-  if (
-    stage === "awaiting_photos" &&
-    (mergedPhotos.length > 0 || hasSufficientDescription(listingState, body))
-  ) {
+  if (stage === "awaiting_photos" && mergedPhotos.length > 0) {
     stage = "awaiting_condition";
   }
-  if (stage === "awaiting_condition" && listingState.condition) {
+  if (stage === "awaiting_condition" && listingState.conditionConfirmed) {
     stage = "finalize";
   }
   if (stage === "finalize" && userConfirmed(body)) {
@@ -280,7 +315,11 @@ export async function processInboundMessage(
   if (stage === "complete") {
     reply = "You're all set. We'll be in touch.";
   } else if (stage === "awaiting_item") {
-    reply = "What are you selling?";
+    if (listingState.itemTitle && !listingState.itemTitleConfirmed) {
+      reply = `This looks like a ${listingState.itemTitle}. Is that right?`;
+    } else {
+      reply = "What are you selling?";
+    }
   } else if (stage === "awaiting_photos") {
     reply =
       "Can you send 1–3 photos? If not, describe the item briefly.";
