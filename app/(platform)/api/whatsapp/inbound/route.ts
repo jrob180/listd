@@ -107,11 +107,13 @@ export async function POST(request: NextRequest) {
 function twiml(message: string): NextResponse {
   const body = escapeXml(message);
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>${body}</Body></Message></Response>`;
-  console.log("[whatsapp/inbound] TWIML", { message: message.slice(0, 80), xmlLength: xml.length, xmlPreview: xml.slice(0, 120) + "..." });
+  const byteLength = Buffer.byteLength(xml, "utf8");
+  console.log("[whatsapp/inbound] TWIML", { message: message.slice(0, 80), xmlLength: xml.length, byteLength });
   return new NextResponse(xml, {
     status: 200,
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
+      "Content-Length": String(byteLength),
       "Cache-Control": "no-store",
     },
   });
