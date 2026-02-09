@@ -32,6 +32,8 @@ export type ListingState = {
   [key: string]: unknown;
 };
 
+const TRIGGER_PHRASE = "i want to sell something";
+
 type Stage =
   | "awaiting_item"
   | "awaiting_photos"
@@ -221,6 +223,33 @@ export async function processInboundMessage(
   });
 
   const now = new Date().toISOString();
+
+  // Global reset trigger: user wants to start over.
+  const normalized = normalizeBody(body).toLowerCase();
+  if (normalized === TRIGGER_PHRASE) {
+    const resetState: ListingState = {};
+    const resetStage: Stage = "awaiting_item";
+    await supabase.from("sms_conversations").upsert(
+      {
+        phone_number: from,
+        stage: resetStage,
+        item_name: null,
+        condition: null,
+        photo_urls: [],
+        listing_state: resetState,
+        updated_at: now,
+      },
+      { onConflict: "phone_number" }
+    );
+    const reply = "What are you selling?";
+    await supabase.from("sms_messages").insert({
+      phone_number: from,
+      direction: "out",
+      body: reply,
+      media_urls: [],
+    });
+    return { message: reply };
+  }
 
   // New conversation: create row and ask first question
   if (!row) {
