@@ -62,6 +62,24 @@ export async function POST(request: NextRequest) {
 
   const from = normalizeFrom(rawFrom);
 
+  // Quick test (no DB): send "ping" to confirm webhook is reached
+  if (body.trim().toLowerCase() === "ping") {
+    return twiml("pong");
+  }
+
+  // Trigger: reply immediately so Twilio gets 200 before any DB/processing (avoids timeout + no-response)
+  const norm = body.trim().toLowerCase().replace(/\s+/g, " ").trim();
+  const isTrigger =
+    norm === "i want to sell something" ||
+    (norm.includes("want") && norm.includes("sell"));
+  if (isTrigger) {
+    const reply = "Send at least one photo of the item to get started.";
+    void processInboundMessage({ from, body, mediaUrls }).catch((e) =>
+      console.error("[whatsapp/inbound] Trigger background:", e)
+    );
+    return twiml(reply);
+  }
+
   try {
     const { message } = await processInboundMessage({
       from,
