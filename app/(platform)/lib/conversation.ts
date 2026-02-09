@@ -34,6 +34,12 @@ export type ListingState = {
 
 const TRIGGER_PHRASE = "i want to sell something";
 
+/** True if the user is trying to start a new listing (reset intent). */
+function isTriggerMessage(body: string): boolean {
+  const n = normalizeBody(body).toLowerCase().replace(/[.!?]+$/, "");
+  return n === TRIGGER_PHRASE || n.includes("want to sell");
+}
+
 type Stage =
   | "awaiting_item"
   | "awaiting_photos"
@@ -224,19 +230,16 @@ export async function processInboundMessage(
 
   const now = new Date().toISOString();
 
-  // Global reset trigger: user wants to start over.
-  const normalized = normalizeBody(body).toLowerCase();
-  if (normalized === TRIGGER_PHRASE) {
-    const resetState: ListingState = {};
-    const resetStage: Stage = "awaiting_item";
+  // Global reset: "i want to sell something" (or similar) always starts fresh.
+  if (isTriggerMessage(body)) {
     await supabase.from("sms_conversations").upsert(
       {
         phone_number: from,
-        stage: resetStage,
+        stage: "awaiting_item",
         item_name: null,
         condition: null,
         photo_urls: [],
-        listing_state: resetState,
+        listing_state: {} as ListingState,
         updated_at: now,
       },
       { onConflict: "phone_number" }
@@ -251,7 +254,7 @@ export async function processInboundMessage(
     return { message: reply };
   }
 
-  // New conversation: create row and ask first question
+  // New conversation: no row yet → create and ask first question
   if (!row) {
     await supabase.from("sms_conversations").upsert(
       {
@@ -275,9 +278,13 @@ export async function processInboundMessage(
     return { message: reply };
   }
 
-  // Extract from user input when there is something to extract
-  const hasInput = normalizeBody(body).length > 0 || mediaUrls.length > 0;
-  if (hasInput) {
+  // Never extract from a trigger-like message (we already returned above; this is a safeguard).
+  const normBody = normalizeBody(body);
+  const hasInput =
+    normBody.length > 0 || mediaUrls.length > 0;
+  const isTrigger = isTriggerMessage(body);
+
+  if (hasInput && !isTrigger) {
     const imageUrls = await Promise.all(
       mediaUrls.slice(0, 2).map((u) => fetchTwilioImageAsDataUrl(u))
     );
@@ -288,10 +295,7 @@ export async function processInboundMessage(
   // Server owns photos
   listingState.photos = mergedPhotos;
 
-  // Handle explicit confirmations based on user reply.
-  const normBody = normalizeBody(body);
-
-  // Item title confirmation: only when we already had a title before this turn.
+  // Item title confirmation: only when we already had a title and user is clearly confirming or correcting.
   const hadItemTitleBefore = !!previousListingState.itemTitle;
   const hasItemTitleNow = !!listingState.itemTitle;
   if (
@@ -299,29 +303,30 @@ export async function processInboundMessage(
     hadItemTitleBefore &&
     hasItemTitleNow &&
     listingState.itemTitleConfirmed !== true &&
-    normBody.length > 0
+    normBody.length > 0 &&
+    !isTrigger
   ) {
     if (userConfirmed(body)) {
       listingState.itemTitleConfirmed = true;
     } else {
-      // Treat reply as correction – replace title and confirm.
-      listingState.itemTitle = body.trim();
-      listingState.itemTitleConfirmed = true;
+      // Treat as correction only if it looks like a real answer (not "what?" or empty).
+      const looksLikeCorrection = normBody.length >= 2 && !/^(what|no|nope|wrong)$/i.test(normBody);
+      if (looksLikeCorrection) {
+        listingState.itemTitle = body.trim();
+        listingState.itemTitleConfirmed = true;
+      }
     }
   }
 
-  // Condition confirmation: when in awaiting_condition and we now have a condition
-  // and the user actually replied with something this turn.
-  const hadConditionBefore = !!previousListingState.condition;
+  // Condition confirmation: only in awaiting_condition, and never from trigger message.
   const hasConditionNow = !!listingState.condition;
   if (
     stage === "awaiting_condition" &&
     hasConditionNow &&
     listingState.conditionConfirmed !== true &&
-    normBody.length > 0
+    normBody.length > 0 &&
+    !isTrigger
   ) {
-    // Either we just extracted condition from this reply, or it was already
-    // present and the user responded again – in both cases treat as confirmed.
     listingState.conditionConfirmed = true;
   }
 
