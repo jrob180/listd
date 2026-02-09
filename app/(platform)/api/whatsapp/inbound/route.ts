@@ -56,6 +56,15 @@ export async function POST(request: NextRequest) {
   const body = params.Body ?? "";
   const mediaUrls = getMediaUrls(params);
 
+  // Debug: see these in Vercel → Project → Logs (filter by /api/whatsapp/inbound)
+  console.log("[whatsapp/inbound] REQUEST", {
+    From: rawFrom,
+    Body: body,
+    bodyLength: body.length,
+    paramKeys: Object.keys(params),
+    hasBodyKey: "Body" in params,
+  });
+
   if (!rawFrom) {
     return NextResponse.json({ error: "Missing From" }, { status: 400 });
   }
@@ -64,7 +73,9 @@ export async function POST(request: NextRequest) {
 
   // Quick test (no DB): send "ping" to confirm webhook is reached
   if (body.trim().toLowerCase() === "ping") {
-    return twiml("pong");
+    const res = twiml("pong");
+    console.log("[whatsapp/inbound] RESPONSE (ping)", { reply: "pong", contentType: res.headers.get("Content-Type"), bodyLength: res.headers.get("Content-Length") ?? "(stream)" });
+    return res;
   }
 
   // Trigger: reply immediately so Twilio gets 200 before any DB/processing (avoids timeout + no-response)
@@ -96,6 +107,7 @@ export async function POST(request: NextRequest) {
 function twiml(message: string): NextResponse {
   const body = escapeXml(message);
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>${body}</Body></Message></Response>`;
+  console.log("[whatsapp/inbound] TWIML", { message: message.slice(0, 80), xmlLength: xml.length, xmlPreview: xml.slice(0, 120) + "..." });
   return new NextResponse(xml, {
     status: 200,
     headers: {
