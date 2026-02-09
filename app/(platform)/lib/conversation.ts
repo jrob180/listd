@@ -125,6 +125,8 @@ Conversation behavior:
 - When you have at least one photo, start inferring:
   - Brand, model, color, material, style, approximate condition.
   - Ask the user to confirm only the most important uncertain details (e.g. exact model, size).
+- You can and should visually inspect all attached images (they are of the same item).
+- If the user corrects you (e.g. \"it's a lamp, not sneakers\"), **immediately trust the correction**, update listing_state, and do not repeat the same mistake.
 - You **do not** actually fetch live data or real URLs. For comparableListings, you may invent realistic but clearly-marked example comps based on your knowledge.
 - Try to limit questions to 1–2 at a time, and prefer yes/no or small-choice confirmations.
 - When you feel the listing is good enough to post (title, description, price, key specifics), set \`listing_state.isComplete = true\`.
@@ -145,11 +147,12 @@ Output format:
 Where ListingState is the structure described above.
 `;
 
-  const userPayload = {
+  // Text payload the model can parse, plus images as separate vision inputs
+  const userStructuredPayload = {
     user_message: body,
-    media_urls: mediaUrls,
-    all_photo_urls: mergedPhotos,
     previous_listing_state: previousListingState,
+    // All known photos of this item so far
+    all_photo_urls: mergedPhotos,
   };
 
   const apiKey = process.env.OPENAI_API_KEY;
@@ -177,7 +180,17 @@ Where ListingState is the structure described above.
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: JSON.stringify(userPayload),
+            // Mixed text + image content so the model can actually see the item
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(userStructuredPayload),
+              },
+              ...mergedPhotos.map((url) => ({
+                type: "image_url" as const,
+                image_url: { url },
+              })),
+            ],
           },
         ],
         response_format: { type: "json_object" },
