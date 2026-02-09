@@ -61,6 +61,44 @@ type ModelResponse = {
 
 const OPENAI_MODEL = "gpt-4o-mini";
 
+async function fetchTwilioImageAsDataUrl(
+  url: string
+): Promise<string | null> {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+
+  if (!accountSid || !authToken) {
+    return null;
+  }
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(
+          `${accountSid}:${authToken}`
+        ).toString("base64")}`,
+      },
+    });
+
+    if (!res.ok) {
+      console.error(
+        "[conversation] Failed to fetch Twilio media",
+        res.status,
+        await res.text()
+      );
+      return null;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "image/jpeg";
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch (e) {
+    console.error("[conversation] Error fetching Twilio media:", e);
+    return null;
+  }
+}
+
 export async function processInboundMessage(
   input: ProcessInput
 ): Promise<ProcessResult> {
@@ -147,14 +185,6 @@ Output format:
 Where ListingState is the structure described above.
 `;
 
-  // Text payload the model can parse, plus images as separate vision inputs
-  const userStructuredPayload = {
-    user_message: body,
-    previous_listing_state: previousListingState,
-    // All known photos of this item so far
-    all_photo_urls: mergedPhotos,
-  };
-
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     // Fallback if not configured
@@ -167,6 +197,17 @@ Where ListingState is the structure described above.
   let modelReply: ModelResponse;
 
   try {
+    // Try to convert the latest Twilio media URLs into inline data URLs OpenAI can see.
+    const imageDataUrls = await Promise.all(
+      mediaUrls.slice(0, 3).map((u) => fetchTwilioImageAsDataUrl(u))
+    );
+    const visionParts = imageDataUrls
+      .filter((u): u is string => !!u)
+      .map((dataUrl) => ({
+        type: "image_url" as const,
+        image_url: { url: dataUrl },
+      }));
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -180,17 +221,24 @@ Where ListingState is the structure described above.
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            // Mixed text + image content so the model can actually see the item
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(userStructuredPayload),
-              },
-              ...mergedPhotos.map((url) => ({
-                type: "image_url" as const,
-                image_url: { url },
-              })),
-            ],
+            content:
+              visionParts.length === 0
+                ? JSON.stringify({
+                    user_message: body,
+                    previous_listing_state: previousListingState,
+                    all_photo_urls: mergedPhotos,
+                  })
+                : [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        user_message: body,
+                        previous_listing_state: previousListingState,
+                        all_photo_urls: mergedPhotos,
+                      }),
+                    },
+                    ...visionParts,
+                  ],
           },
         ],
         response_format: { type: "json_object" },
