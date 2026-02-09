@@ -149,9 +149,15 @@ async function runInference(
 }
 
 function isTrigger(body: string): boolean {
-  const n = normalizeBody(body).toLowerCase().replace(/[.!?]+$/, "");
+  if (!body || typeof body !== "string") return false;
+  const n = normalizeBody(body)
+    .toLowerCase()
+    .replace(/[\s]+/g, " ")
+    .replace(/[.!?]+$/, "")
+    .trim();
   return (
-    n === "i want to sell something" || n.includes("want to sell")
+    n === "i want to sell something" ||
+    (n.includes("want") && n.includes("sell"))
   );
 }
 
@@ -169,6 +175,46 @@ export async function processInboundMessage(
   input: ProcessInput
 ): Promise<ProcessResult> {
   const { from, body, mediaUrls } = input;
+
+  // —— 0. Entry: respond immediately so Twilio always gets a reply ——
+  if (isTrigger(body)) {
+    const supabase = getSupabase();
+    const now = new Date().toISOString();
+    try {
+      await supabase.from("sms_messages").insert({
+        phone_number: from,
+        direction: "in",
+        body,
+        media_urls: mediaUrls,
+      });
+    } catch (_) {
+      // don't block reply if logging fails
+    }
+    try {
+      await supabase.from("sms_conversations").upsert(
+        {
+          phone_number: from,
+          stage: "awaiting_intake",
+          item_name: null,
+          condition: null,
+          photo_urls: [],
+          listing_state: {} as ListingState,
+          updated_at: now,
+        },
+        { onConflict: "phone_number" }
+      );
+      await supabase.from("sms_messages").insert({
+        phone_number: from,
+        direction: "out",
+        body: ENTRY_MESSAGE,
+        media_urls: [],
+      });
+    } catch (_) {
+      // still reply even if DB fails
+    }
+    return { message: ENTRY_MESSAGE };
+  }
+
   const supabase = getSupabase();
   const now = new Date().toISOString();
 
@@ -186,56 +232,39 @@ export async function processInboundMessage(
   const stage: Stage = (row?.stage as Stage) || "awaiting_intake";
   const normBody = normalizeBody(body);
 
-  await supabase.from("sms_messages").insert({
-    phone_number: from,
-    direction: "in",
-    body,
-    media_urls: mediaUrls,
-  });
-
-  // —— 0. Entry ——
-  if (isTrigger(body)) {
-    await supabase.from("sms_conversations").upsert(
-      {
-        phone_number: from,
-        stage: "awaiting_intake",
-        item_name: null,
-        condition: null,
-        photo_urls: [],
-        listing_state: {} as ListingState,
-        updated_at: now,
-      },
-      { onConflict: "phone_number" }
-    );
+  try {
     await supabase.from("sms_messages").insert({
       phone_number: from,
-      direction: "out",
-      body: ENTRY_MESSAGE,
-      media_urls: [],
+      direction: "in",
+      body,
+      media_urls: mediaUrls,
     });
-    return { message: ENTRY_MESSAGE };
+  } catch (_) {
+    // don't block reply
   }
 
   // New conversation without trigger: still start at entry
   if (!row) {
-    await supabase.from("sms_conversations").upsert(
-      {
+    try {
+      await supabase.from("sms_conversations").upsert(
+        {
+          phone_number: from,
+          stage: "awaiting_intake",
+          item_name: null,
+          condition: null,
+          photo_urls: mergedPhotos,
+          listing_state: {} as ListingState,
+          updated_at: now,
+        },
+        { onConflict: "phone_number" }
+      );
+      await supabase.from("sms_messages").insert({
         phone_number: from,
-        stage: "awaiting_intake",
-        item_name: null,
-        condition: null,
-        photo_urls: mergedPhotos,
-        listing_state: {} as ListingState,
-        updated_at: now,
-      },
-      { onConflict: "phone_number" }
-    );
-    await supabase.from("sms_messages").insert({
-      phone_number: from,
-      direction: "out",
-      body: ENTRY_MESSAGE,
-      media_urls: [],
-    });
+        direction: "out",
+        body: ENTRY_MESSAGE,
+        media_urls: [],
+      });
+    } catch (_) {}
     return { message: ENTRY_MESSAGE };
   }
 
