@@ -14,50 +14,26 @@ export type ProcessResult = {
   message: string;
 };
 
-// Structured fields the LLM can extract. Photos are server-managed.
+// Server-owned state. LLM only provides inferredItem / inferredCondition.
 export type ListingState = {
-  itemTitle?: string;
-  categoryPath?: string;
-  brand?: string;
-  model?: string;
-  size?: string;
-  color?: string;
-  condition?: string;
-  conditionDetails?: string;
-  defects?: string[];
-   // Confirmation flags – ONLY the server may set these.
-  itemTitleConfirmed?: boolean;
-  brandConfirmed?: boolean;
+  inferredItem?: string; // e.g. "modern arc floor lamp"
+  inferredCondition?: string; // e.g. "used – like new"
+  itemTitle?: string; // final after user confirms/corrects
+  condition?: string; // final after user confirms/corrects
+  itemConfirmed?: boolean;
   conditionConfirmed?: boolean;
   [key: string]: unknown;
 };
 
-const TRIGGER_PHRASE = "i want to sell something";
-
-/** True if the user is trying to start a new listing (reset intent). */
-function isTriggerMessage(body: string): boolean {
-  const n = normalizeBody(body).toLowerCase().replace(/[.!?]+$/, "");
-  return n === TRIGGER_PHRASE || n.includes("want to sell");
-}
-
 type Stage =
-  | "awaiting_item"
-  | "awaiting_photos"
-  | "awaiting_condition"
-  | "finalize"
+  | "awaiting_intake"
+  | "item_confirm"
+  | "condition_confirm"
+  | "final_confirm"
   | "complete";
 
-const STAGES: Stage[] = [
-  "awaiting_item",
-  "awaiting_photos",
-  "awaiting_condition",
-  "finalize",
-  "complete",
-];
-
-function isStage(s: string): s is Stage {
-  return STAGES.includes(s as Stage);
-}
+const ENTRY_MESSAGE =
+  "Great — send a photo of the item. If you can't, just describe it.";
 
 function coerceStringArray(v: unknown): string[] {
   if (Array.isArray(v)) {
@@ -87,29 +63,6 @@ function coerceStringArray(v: unknown): string[] {
   return [];
 }
 
-/** Merge patch into state. Only overwrite when patch has a defined value. Never delete. */
-function mergePatch(
-  state: ListingState,
-  patch: Partial<ListingState> | null | undefined
-): ListingState {
-  if (!patch || typeof patch !== "object") return state;
-  const out = { ...state };
-  for (const [k, v] of Object.entries(patch)) {
-    // LLM is NOT allowed to touch confirmation flags.
-    if (
-      k === "itemTitleConfirmed" ||
-      k === "brandConfirmed" ||
-      k === "conditionConfirmed"
-    ) {
-      continue;
-    }
-    if (v !== undefined && v !== null) {
-      (out as Record<string, unknown>)[k] = v;
-    }
-  }
-  return out;
-}
-
 async function fetchTwilioImageAsDataUrl(url: string): Promise<string | null> {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -131,34 +84,38 @@ async function fetchTwilioImageAsDataUrl(url: string): Promise<string | null> {
   }
 }
 
-const EXTRACTION_SYSTEM = `You are an extraction engine. Do not ask questions. Do not converse. Only extract structured fields you are confident about from the user's message and/or the attached images.
+const INFERENCE_SYSTEM = `You are an inference engine. Look at the user's photos and/or text and infer:
+1. A short, human item description (e.g. "modern arc floor lamp", "vintage denim jacket") — one clear phrase for "This looks like a [X]. Is that right?"
+2. A listing condition phrase (e.g. "used – like new", "used – good") for "I'd list this as '[X]'. Does that sound right?"
 
-Output ONLY valid JSON in this exact shape (no other text):
-{ "listing_state_patch": { ... } }
+Output ONLY valid JSON:
+{ "inferredItem": "...", "inferredCondition": "..." }
 
-listing_state_patch may contain any of: itemTitle, categoryPath, brand, model, size, color, condition, conditionDetails, defects (array of strings). Only include fields you are confident about. If unsure, omit the field.`;
+Be concise. No questions. No extra text.`;
 
-type ExtractionOutput = { listing_state_patch?: Partial<ListingState> };
+type InferenceOutput = {
+  inferredItem?: string;
+  inferredCondition?: string;
+};
 
-async function extractFromUser(
+async function runInference(
   userMessage: string,
-  currentState: ListingState,
   imageDataUrls: string[]
-): Promise<Partial<ListingState>> {
+): Promise<InferenceOutput> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return {};
 
-  const userPayload = {
-    latest_user_message: userMessage,
-    current_listing_state: currentState,
+  const payload = {
+    user_message: userMessage,
+    has_images: imageDataUrls.length > 0,
   };
 
   const content: unknown[] =
     imageDataUrls.length === 0
-      ? [JSON.stringify(userPayload)]
+      ? [JSON.stringify(payload)]
       : [
-          { type: "text" as const, text: JSON.stringify(userPayload) },
-          ...imageDataUrls.slice(0, 2).map((url) => ({
+          { type: "text" as const, text: JSON.stringify(payload) },
+          ...imageDataUrls.slice(0, 3).map((url) => ({
             type: "image_url" as const,
             image_url: { url },
           })),
@@ -175,7 +132,7 @@ async function extractFromUser(
         model: "gpt-4o-mini",
         temperature: 0.2,
         messages: [
-          { role: "system", content: EXTRACTION_SYSTEM },
+          { role: "system", content: INFERENCE_SYSTEM },
           { role: "user", content },
         ],
         response_format: { type: "json_object" },
@@ -185,17 +142,27 @@ async function extractFromUser(
     const json = await res.json();
     const raw = json.choices?.[0]?.message?.content;
     if (!raw || typeof raw !== "string") return {};
-    const parsed = JSON.parse(raw) as ExtractionOutput;
-    return parsed?.listing_state_patch ?? {};
+    return (JSON.parse(raw) as InferenceOutput) ?? {};
   } catch {
     return {};
   }
 }
 
-function userConfirmed(body: string): boolean {
-  return /^(yes|yeah|yep|sure|please|ok|okay|y|sounds good|do it)$/i.test(
+function isTrigger(body: string): boolean {
+  const n = normalizeBody(body).toLowerCase().replace(/[.!?]+$/, "");
+  return (
+    n === "i want to sell something" || n.includes("want to sell")
+  );
+}
+
+function isYes(body: string): boolean {
+  return /^(yes|yeah|yep|sure|y|correct|right|that\'?s right|sounds good)$/i.test(
     normalizeBody(body)
   );
+}
+
+function isNotYet(body: string): boolean {
+  return /^(no|not yet|wait|hold on|later)$/i.test(normalizeBody(body));
 }
 
 export async function processInboundMessage(
@@ -203,6 +170,7 @@ export async function processInboundMessage(
 ): Promise<ProcessResult> {
   const { from, body, mediaUrls } = input;
   const supabase = getSupabase();
+  const now = new Date().toISOString();
 
   const { data: existing } = await supabase
     .from("sms_conversations")
@@ -213,14 +181,11 @@ export async function processInboundMessage(
   const row = (existing as SmsConversation | null) ?? null;
   const currentPhotos = coerceStringArray(row?.photo_urls as unknown);
   const mergedPhotos = [...currentPhotos, ...mediaUrls].filter(Boolean);
-  const previousListingState: ListingState =
+  const listingState: ListingState =
     (row?.listing_state as ListingState | null) ?? {};
-  let listingState: ListingState = { ...previousListingState };
-  let stage: Stage = isStage(row?.stage ?? "")
-    ? (row!.stage as Stage)
-    : "awaiting_item";
+  const stage: Stage = (row?.stage as Stage) || "awaiting_intake";
+  const normBody = normalizeBody(body);
 
-  // Log inbound
   await supabase.from("sms_messages").insert({
     phone_number: from,
     direction: "in",
@@ -228,14 +193,12 @@ export async function processInboundMessage(
     media_urls: mediaUrls,
   });
 
-  const now = new Date().toISOString();
-
-  // Global reset: "i want to sell something" (or similar) always starts fresh.
-  if (isTriggerMessage(body)) {
+  // —— 0. Entry ——
+  if (isTrigger(body)) {
     await supabase.from("sms_conversations").upsert(
       {
         phone_number: from,
-        stage: "awaiting_item",
+        stage: "awaiting_intake",
         item_name: null,
         condition: null,
         photo_urls: [],
@@ -244,123 +207,121 @@ export async function processInboundMessage(
       },
       { onConflict: "phone_number" }
     );
-    const reply = "What are you selling?";
     await supabase.from("sms_messages").insert({
       phone_number: from,
       direction: "out",
-      body: reply,
+      body: ENTRY_MESSAGE,
       media_urls: [],
     });
-    return { message: reply };
+    return { message: ENTRY_MESSAGE };
   }
 
-  // New conversation: no row yet → create and ask first question
+  // New conversation without trigger: still start at entry
   if (!row) {
     await supabase.from("sms_conversations").upsert(
       {
         phone_number: from,
-        stage: "awaiting_item",
+        stage: "awaiting_intake",
         item_name: null,
         condition: null,
         photo_urls: mergedPhotos,
-        listing_state: {},
+        listing_state: {} as ListingState,
         updated_at: now,
       },
       { onConflict: "phone_number" }
     );
-    const reply = "What are you selling?";
     await supabase.from("sms_messages").insert({
       phone_number: from,
       direction: "out",
-      body: reply,
+      body: ENTRY_MESSAGE,
       media_urls: [],
     });
-    return { message: reply };
+    return { message: ENTRY_MESSAGE };
   }
 
-  // Never extract from a trigger-like message (we already returned above; this is a safeguard).
-  const normBody = normalizeBody(body);
-  const hasInput =
-    normBody.length > 0 || mediaUrls.length > 0;
-  const isTrigger = isTriggerMessage(body);
-
-  if (hasInput && !isTrigger) {
-    const imageUrls = await Promise.all(
-      mediaUrls.slice(0, 2).map((u) => fetchTwilioImageAsDataUrl(u))
-    );
-    const dataUrls = imageUrls.filter((u): u is string => !!u);
-    const patch = await extractFromUser(body, listingState, dataUrls);
-    listingState = mergePatch(listingState, patch);
-  }
-  // Server owns photos
-  listingState.photos = mergedPhotos;
-
-  // Item title confirmation: only when we already had a title and user is clearly confirming or correcting.
-  const hadItemTitleBefore = !!previousListingState.itemTitle;
-  const hasItemTitleNow = !!listingState.itemTitle;
-  if (
-    stage === "awaiting_item" &&
-    hadItemTitleBefore &&
-    hasItemTitleNow &&
-    listingState.itemTitleConfirmed !== true &&
-    normBody.length > 0 &&
-    !isTrigger
-  ) {
-    if (userConfirmed(body)) {
-      listingState.itemTitleConfirmed = true;
-    } else {
-      // Treat as correction only if it looks like a real answer (not "what?" or empty).
-      const looksLikeCorrection = normBody.length >= 2 && !/^(what|no|nope|wrong)$/i.test(normBody);
-      if (looksLikeCorrection) {
-        listingState.itemTitle = body.trim();
-        listingState.itemTitleConfirmed = true;
-      }
-    }
-  }
-
-  // Condition confirmation: only in awaiting_condition, and never from trigger message.
-  const hasConditionNow = !!listingState.condition;
-  if (
-    stage === "awaiting_condition" &&
-    hasConditionNow &&
-    listingState.conditionConfirmed !== true &&
-    normBody.length > 0 &&
-    !isTrigger
-  ) {
-    listingState.conditionConfirmed = true;
-  }
-
-  // Advance stage when conditions are met
-  if (stage === "awaiting_item" && listingState.itemTitleConfirmed) {
-    stage = "awaiting_photos";
-  }
-  if (stage === "awaiting_photos" && mergedPhotos.length > 0) {
-    stage = "awaiting_condition";
-  }
-  if (stage === "awaiting_condition" && listingState.conditionConfirmed) {
-    stage = "finalize";
-  }
-  if (stage === "finalize" && userConfirmed(body)) {
-    stage = "complete";
-  }
-
-  // One question per turn — chosen by server only
   let reply: string;
-  if (stage === "complete") {
-    reply = "You're all set. We'll be in touch.";
-  } else if (stage === "awaiting_item") {
-    if (listingState.itemTitle && !listingState.itemTitleConfirmed) {
-      reply = `This looks like a ${listingState.itemTitle}. Is that right?`;
-    } else {
-      reply = "What are you selling?";
+  let nextStage: Stage = stage;
+  const nextState: ListingState = { ...listingState };
+  nextState.photos = mergedPhotos;
+
+  switch (stage) {
+    // —— 1. Intake → 2. Inference → 3. Item confirmation ——
+    case "awaiting_intake": {
+      const hasContent = mergedPhotos.length > 0 || normBody.length >= 2;
+      if (!hasContent) {
+        reply = ENTRY_MESSAGE;
+        break;
+      }
+      const imageUrls = await Promise.all(
+        mediaUrls.slice(0, 3).map((u) => fetchTwilioImageAsDataUrl(u))
+      );
+      const dataUrls = imageUrls.filter((u): u is string => !!u);
+      const out = await runInference(body, dataUrls);
+      nextState.inferredItem =
+        out.inferredItem?.trim() || "item";
+      nextState.inferredCondition =
+        out.inferredCondition?.trim() || "used – good";
+      nextState.itemTitle = nextState.inferredItem;
+      nextState.condition = nextState.inferredCondition;
+      reply = `This looks like a ${nextState.inferredItem}. Is that right?`;
+      nextStage = "item_confirm";
+      break;
     }
-  } else if (stage === "awaiting_photos") {
-    reply =
-      "Can you send 1–3 photos? If not, describe the item briefly.";
-  } else if (stage === "awaiting_condition") {
-    reply = "What condition is it in? (like new / good / fair)";
-  } else {
-    reply = "Got it — want me to list this for you?";
+
+    // —— 4. User response to item → 5. Condition confirmation ——
+    case "item_confirm": {
+      if (isYes(body)) {
+        nextState.itemConfirmed = true;
+        nextState.itemTitle = nextState.itemTitle || nextState.inferredItem;
+      } else if (normBody.length >= 2 && !/^(no|nope|not sure|idk)$/i.test(normBody)) {
+        nextState.itemTitle = body.trim();
+        nextState.itemConfirmed = true;
+      } else {
+        // "not sure" or similar: keep generic, still move on
+        nextState.itemTitle = nextState.inferredItem || "item";
+        nextState.itemConfirmed = true;
+      }
+      reply = `I'd list this as '${nextState.condition || nextState.inferredCondition || "used – good"}'. Does that sound right?`;
+      nextStage = "condition_confirm";
+      break;
+    }
+
+    // —— 5. User response to condition → 6. Final confirmation ——
+    case "condition_confirm": {
+      if (isYes(body)) {
+        nextState.conditionConfirmed = true;
+        nextState.condition =
+          nextState.condition || nextState.inferredCondition;
+      } else if (normBody.length >= 2) {
+        nextState.condition = body.trim();
+        nextState.conditionConfirmed = true;
+      } else {
+        nextState.conditionConfirmed = true;
+      }
+      reply =
+        "Got it. Want me to list this and handle the rest for you?";
+      nextStage = "final_confirm";
+      break;
+    }
+
+    // —— 6. User says yes / not yet ——
+    case "final_confirm": {
+      if (isYes(body)) {
+        reply = "You're all set. We'll be in touch.";
+        nextStage = "complete";
+      } else if (isNotYet(body)) {
+        reply = "No problem — just say when you're ready.";
+      } else {
+        reply =
+          "Got it. Want me to list this and handle the rest for you?";
+      }
+      break;
+    }
+
+    case "complete":
+    default:
+      reply = "You're all set. We'll be in touch.";
+      break;
   }
 
   await supabase.from("sms_messages").insert({
@@ -373,11 +334,11 @@ export async function processInboundMessage(
   await supabase.from("sms_conversations").upsert(
     {
       phone_number: from,
-      stage,
-      item_name: listingState.itemTitle ?? null,
-      condition: listingState.condition ?? null,
+      stage: nextStage,
+      item_name: nextState.itemTitle ?? null,
+      condition: nextState.condition ?? null,
       photo_urls: mergedPhotos,
-      listing_state: listingState,
+      listing_state: nextState,
       updated_at: now,
     },
     { onConflict: "phone_number" }
