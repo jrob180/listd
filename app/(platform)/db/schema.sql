@@ -7,6 +7,8 @@ create table if not exists sms_conversations (
   item_name text,
   condition text,
   photo_urls jsonb default '[]'::jsonb,
+  -- Structured AI state used to build the marketplace listing (title, price, attributes, etc.)
+  listing_state jsonb default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
