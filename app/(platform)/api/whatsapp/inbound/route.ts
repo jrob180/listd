@@ -94,9 +94,10 @@ export async function POST(request: NextRequest) {
 }
 
 function twiml(message: string): NextResponse {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(message)}</Message></Response>`;
+  // WhatsApp expects <Body> inside <Message> for the reply to be delivered
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message><Body>${escapeXml(message)}</Body></Message></Response>`;
   return new NextResponse(xml, {
-    headers: { "Content-Type": "text/xml" },
+    headers: { "Content-Type": "application/xml" },
   });
 }
 
