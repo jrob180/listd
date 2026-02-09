@@ -9,11 +9,20 @@ export function getSupabase() {
 
 export type SmsUser = { id: string; phone_number: string };
 
+export type PendingPrompt =
+  | { type: "confirm_identity"; proposedIdentity: string }
+  | { type: "confirm_size" }
+  | { type: "choose_condition"; suggested?: string }
+  | { type: "price_type" }
+  | { type: "floor_price" }
+  | { type: "final_confirm"; summary: string };
+
 export type ListingDraft = {
   id: string;
   user_id: string;
   status: "active" | "complete" | "abandoned";
   stage: string;
+  pending?: PendingPrompt | null;
   created_at: string;
   updated_at: string;
 };

@@ -66,3 +66,24 @@ export async function storeInboundMedia(
   }
   return out.filter(Boolean);
 }
+
+/**
+ * Register already-uploaded storage URLs (e.g. from app channel) in draft_photos. No download.
+ */
+export async function registerStorageUrls(
+  storageUrls: string[],
+  draftId: string
+): Promise<string[]> {
+  const supabase = getSupabase();
+  const out: string[] = [];
+  for (const url of storageUrls) {
+    if (!url?.trim()) continue;
+    const { error } = await supabase.from("draft_photos").insert({
+      draft_id: draftId,
+      kind: "user",
+      storage_url: url.trim(),
+    });
+    if (!error) out.push(url.trim());
+  }
+  return out;
+}

@@ -22,6 +22,7 @@ create table if not exists listing_drafts (
     'final_confirm',
     'complete'
   )),
+  pending jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

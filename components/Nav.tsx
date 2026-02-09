@@ -5,9 +5,9 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 
 const navLinks = [
-  { label: "Buy", href: "#" },
-  { label: "Sell", href: "#" },
-  { label: "Your Products", href: "#" },
+  { label: "Buy", href: "/" },
+  { label: "Sell", href: "/sell" },
+  { label: "Your Products", href: "/list" },
 ];
 
 export default function Nav() {
