@@ -8,6 +8,9 @@ type PillButtonProps = {
   className?: string;
   as?: "button" | "a";
   type?: "button" | "submit";
+  target?: string;
+  rel?: string;
+  onClick?: () => void;
 };
 
 /* Speech bubble icon (Bootstrap Icons chat-fill, MIT). Transparent background, white fill. */
@@ -31,6 +34,9 @@ export default function PillButton({
   className = "",
   as = "a",
   type = "button",
+  target,
+  rel,
+  onClick,
 }: PillButtonProps) {
   const baseClass =
     "inline-flex items-center gap-3 rounded-[1.25rem] bg-[#efefef] px-5 py-3 text-[0.8125rem] font-medium leading-[1.35] text-[#111] border border-[rgba(0,0,0,0.06)] transition-opacity hover:opacity-90 active:opacity-95";
@@ -58,6 +64,9 @@ export default function PillButton({
         className={`${baseClass} ${className}`}
         whileHover={{ scale: 1.02 }}
         whileTap={{ scale: 0.98 }}
+        target={target}
+        rel={rel}
+        onClick={onClick}
       >
         {content}
       </motion.a>
@@ -70,6 +79,7 @@ export default function PillButton({
       className={`${baseClass} ${className}`}
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
+      onClick={onClick}
     >
       {content}
     </motion.button>

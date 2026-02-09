@@ -4,9 +4,25 @@ import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import PillButton from "@/components/PillButton";
 
+const PREFILL_BODY = "i want to sell something";
+
+function toWhatsAppNumber(e164: string): string {
+  return e164.replace(/\D/g, "");
+}
+
+function getWhatsAppHref(phoneNumber: string): string {
+  const num = toWhatsAppNumber(phoneNumber);
+  const text = encodeURIComponent(PREFILL_BODY);
+  return `https://wa.me/${num}?text=${text}`;
+}
+
 export default function CtaSection() {
   const ref = useRef<HTMLElement>(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  const phoneNumber =
+    process.env.NEXT_PUBLIC_LISTD_PHONE_NUMBER || "+14155238886";
+  const whatsAppHref = getWhatsAppHref(phoneNumber);
 
   return (
     <section
@@ -33,10 +49,17 @@ export default function CtaSection() {
             animate={inView ? { opacity: 1, y: 0 } : {}}
             transition={{ delay: 0.2, duration: 0.4 }}
           >
-            <PillButton href="#iphone-messages">list something</PillButton>
+            <PillButton
+              href={whatsAppHref}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              list something
+            </PillButton>
           </motion.div>
         </motion.div>
       </div>
     </section>
   );
 }
+

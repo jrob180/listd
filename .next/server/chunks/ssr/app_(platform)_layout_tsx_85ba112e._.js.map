@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///Users/paulalucas/Desktop/apps/listd/app/%28platform%29/layout.tsx"],"sourcesContent":["export default function PlatformLayout({\n  children,\n}: {\n  children: React.ReactNode;\n}) {\n  return (\n    <div className=\"min-h-screen bg-[var(--bg)] text-[var(--fg)]\">\n      {children}\n    </div>\n  );\n}\n"],"names":[],"mappings":";;;;;;AAAe,SAAS,eAAe,EACrC,QAAQ,EAGT;IACC,qBACE,8OAAC;QAAI,WAAU;kBACZ;;;;;;AAGP","debugId":null}}]
+}

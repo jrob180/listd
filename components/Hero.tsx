@@ -3,7 +3,23 @@
 import { motion } from "framer-motion";
 import PillButton from "@/components/PillButton";
 
+const PREFILL_BODY = "i want to sell something";
+
+function toWhatsAppNumber(e164: string): string {
+  return e164.replace(/\D/g, "");
+}
+
+function getWhatsAppHref(phoneNumber: string): string {
+  const num = toWhatsAppNumber(phoneNumber);
+  const text = encodeURIComponent(PREFILL_BODY);
+  return `https://wa.me/${num}?text=${text}`;
+}
+
 export default function Hero() {
+  const phoneNumber =
+    process.env.NEXT_PUBLIC_LISTD_PHONE_NUMBER || "+14155238886";
+  const whatsAppHref = getWhatsAppHref(phoneNumber);
+
   return (
     <section className="relative flex min-h-[85vh] flex-col items-center justify-center px-4 pt-24 pb-16 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl text-center">
@@ -29,9 +45,16 @@ export default function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
         >
-          <PillButton href="#iphone-messages">list something</PillButton>
+          <PillButton
+            href={whatsAppHref}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            list something
+          </PillButton>
         </motion.div>
       </div>
     </section>
   );
 }
+

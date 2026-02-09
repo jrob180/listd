@@ -58,7 +58,7 @@ function PageContent() {
   );
 }
 
-export default function Home() {
+export default function MarketingPage() {
   return (
     <Suspense fallback={null}>
       <PageContent />
