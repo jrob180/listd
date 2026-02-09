@@ -33,7 +33,14 @@ function getMediaUrls(params: Record<string, string | undefined>): string[] {
 }
 
 export async function POST(request: NextRequest) {
-  const params = await parseInboundForm(request);
+  let params: { From?: string; Body?: string; [key: string]: string | undefined };
+  try {
+    params = await parseInboundForm(request);
+  } catch (e) {
+    console.error("[sms/inbound] Failed to parse body:", e);
+    return twiml("Something went wrong. Please try again in a moment.");
+  }
+
   const from = params.From;
   const body = params.Body ?? "";
   const mediaUrls = getMediaUrls(params);
@@ -42,13 +49,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing From" }, { status: 400 });
   }
 
-  const { message } = await processInboundMessage({
-    from,
-    body,
-    mediaUrls,
-  });
-
-  return twiml(message);
+  try {
+    const { message } = await processInboundMessage({
+      from,
+      body,
+      mediaUrls,
+    });
+    return twiml(message ?? "Something went wrong. Please try again.");
+  } catch (e) {
+    console.error("[sms/inbound] Error processing message:", e);
+    return twiml("Something went wrong on our end. Please try again in a moment.");
+  }
 }
 
 function twiml(message: string): NextResponse {

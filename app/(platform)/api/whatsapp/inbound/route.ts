@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       body,
       mediaUrls,
     });
-    return twiml(message);
+    return twiml(message ?? "Something went wrong. Please try again.");
   } catch (e) {
     console.error("[whatsapp/inbound] Error processing message:", e);
     return twiml("Something went wrong on our end. Please try again in a moment.");

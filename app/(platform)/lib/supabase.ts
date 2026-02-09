@@ -7,15 +7,57 @@ export function getSupabase() {
   return createClient(url, serviceKey);
 }
 
-export type SmsConversation = {
+export type SmsUser = { id: string; phone_number: string };
+
+export type ListingDraft = {
   id: string;
-  phone_number: string;
+  user_id: string;
+  status: "active" | "complete" | "abandoned";
   stage: string;
-  item_name: string | null;
-  condition: string | null;
-  photo_urls: string[];
-  listing_state: any;
   created_at: string;
   updated_at: string;
 };
 
+export type DraftMessage = {
+  id: string;
+  draft_id: string;
+  direction: "in" | "out";
+  body: string;
+  twilio_media_urls: string[];
+  storage_media_urls: string[];
+  created_at: string;
+};
+
+export type DraftPhoto = {
+  id: string;
+  draft_id: string;
+  kind: "user" | "reference";
+  storage_url: string;
+  created_at: string;
+};
+
+export type DraftFact = {
+  id: string;
+  draft_id: string;
+  key: string;
+  value: unknown;
+  confidence: number;
+  source: string;
+  status: "proposed" | "confirmed" | "rejected";
+  evidence: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchRun = {
+  id: string;
+  draft_id: string;
+  type: "lens" | "ebay";
+  query: string;
+  results: unknown;
+  status: string;
+  duration_ms: number | null;
+  created_at: string;
+};
+
+export const DRAFT_PHOTOS_BUCKET = "draft-photos";
