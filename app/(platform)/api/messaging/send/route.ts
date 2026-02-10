@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { processInboundMessage } from "../../../lib/conversation";
 import { getSupabase, DRAFT_PHOTOS_BUCKET } from "../../../lib/supabase";
+import { processInboundMessage } from "../../../lib/conversation";
 
 /**
- * In-app native messaging: no Twilio. Accepts sessionId + body + optional image uploads.
- * POST JSON: { sessionId: string, body: string, mediaUrls?: string[] }
- * POST FormData: sessionId, body, and optional file(s)
+ * In-app messaging: POST FormData (sessionId, body, files) or JSON (sessionId, body, mediaUrls).
+ * Uploads images to storage, then runs conversation flow (Gemini identity → confirm).
  */
 export async function POST(request: NextRequest) {
   let sessionId: string;
@@ -22,13 +21,10 @@ export async function POST(request: NextRequest) {
     const files = formData.getAll("files") as File[];
     const fileList = files.length ? files : (formData.getAll("file") as File[]);
     if (!sessionId?.trim()) {
-      return NextResponse.json(
-        { error: "Missing sessionId" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
     if (fileList.length > 0) {
-      uploadedMediaUrls = await uploadAppFiles(fileList, sessionId.trim());
+      uploadedMediaUrls = await uploadFiles(fileList, sessionId.trim());
       mediaUrls = uploadedMediaUrls;
     }
   } else {
@@ -37,10 +33,7 @@ export async function POST(request: NextRequest) {
     body = json.body ?? json.message ?? "";
     mediaUrls = Array.isArray(json.mediaUrls) ? json.mediaUrls : [];
     if (!sessionId?.trim()) {
-      return NextResponse.json(
-        { error: "Missing sessionId" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
   }
 
@@ -58,7 +51,7 @@ export async function POST(request: NextRequest) {
       ...(Array.isArray(choices) && choices.length > 0 ? { choices } : {}),
     });
   } catch (e) {
-    console.error("[messaging/send] Error:", e);
+    console.error("[messaging/send]", e);
     return NextResponse.json(
       { error: "Failed to process message", message: "Something went wrong. Please try again." },
       { status: 500 }
@@ -66,7 +59,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function uploadAppFiles(files: File[], sessionId: string): Promise<string[]> {
+async function uploadFiles(files: File[], sessionId: string): Promise<string[]> {
   const supabase = getSupabase();
   const urls: string[] = [];
   for (const file of files) {
@@ -76,10 +69,7 @@ async function uploadAppFiles(files: File[], sessionId: string): Promise<string[
     const buffer = Buffer.from(await file.arrayBuffer());
     const { error } = await supabase.storage
       .from(DRAFT_PHOTOS_BUCKET)
-      .upload(path, buffer, {
-        contentType: file.type,
-        upsert: false,
-      });
+      .upload(path, buffer, { contentType: file.type, upsert: false });
     if (error) continue;
     const { data } = supabase.storage.from(DRAFT_PHOTOS_BUCKET).getPublicUrl(path);
     urls.push(data.publicUrl);
