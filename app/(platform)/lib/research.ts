@@ -13,6 +13,94 @@ export type VisionResult = {
   searchQuery: string;
 };
 
+/**
+ * Lightweight augmentation for Channel3: given image + optional user text,
+ * return a single rich natural-language description to feed as `query`.
+ *
+ * This is intentionally cheaper/simpler than the full research pipeline.
+ */
+export async function buildChannel3AugmentedQuery(
+  imageUrl: string,
+  userText: string | null | undefined,
+): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    const fallback = userText?.trim() || null;
+    console.log("[augment][channel3] no OPENAI_API_KEY, skipping LLM", {
+      imageUrl,
+      userText: userText ?? null,
+      query: fallback,
+    });
+    return fallback;
+  }
+
+  const t = (userText ?? "").trim();
+  const system =
+    "You are helping a product search system understand an item from a photo.\n" +
+    "Write ONE concise but information-dense sentence (max ~40 words) that describes the exact product in the image for a resale marketplace search.\n" +
+    "Include brand, model, category, color, key details, and any tag/label info if mentioned.\n" +
+    "Do not mention 'photo', 'image', 'I see', etc. Just the description text.";
+
+  try {
+    console.log("[augment][channel3] building augmented query", {
+      imageUrl,
+      userText: t || null,
+    });
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.2,
+        max_tokens: 120,
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Describe this exact item for a product search. Here is what the user said (optional): " +
+                  (t || "(no additional text)"),
+              },
+              { type: "image_url", image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      console.log("[augment][channel3] openai response not ok", {
+        status: res.status,
+        statusText: res.statusText,
+      });
+      return t || null;
+    }
+    const json = await res.json();
+    const content = json.choices?.[0]?.message?.content;
+    const out = typeof content === "string" ? content.trim() : "";
+    const finalQuery = out || t || null;
+    console.log("[augment][channel3] augmented query built", {
+      imageUrl,
+      userText: t || null,
+      augmentedQuery: finalQuery,
+    });
+    return finalQuery;
+  } catch (err) {
+    console.log("[augment][channel3] error building augmented query", {
+      imageUrl,
+      userText: t || null,
+      error: (err as Error)?.message ?? String(err),
+    });
+    return t || null;
+  }
+}
+
 export async function runVisionResearch(
   imageUrl: string,
   draftId: string

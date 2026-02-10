@@ -14,6 +14,7 @@ import {
 } from "./supabase";
 import { storeInboundMedia, registerStorageUrls } from "./storage";
 import { lookupByImage } from "./channel3";
+import { buildChannel3AugmentedQuery } from "./research";
 
 export type ProcessInput = { from: string; body: string; mediaUrls: string[] };
 export type ChoiceOption = { label: string; value: string; images?: string[] };
@@ -488,10 +489,22 @@ export async function processInboundMessage(input: ProcessInput): Promise<Proces
 
       await saveMsg(draft.id, "out", "One sec — identifying the item…", [], []);
       await setStage(draft.id, "researching_identity");
-      const q1 = trim(body);
-      const query1 = q1.length > 0 ? q1 : undefined;
+      const rawUserText = trim(body);
+      // Build a rich description from image + user text for Channel3.
+      const augmentedQuery = await buildChannel3AugmentedQuery(img, rawUserText || undefined).catch(
+        () => rawUserText || undefined,
+      );
+      console.log("[channel3] initial lookup with augmentation", {
+        draftId: draft.id,
+        imageUrl: img,
+        rawUserText,
+        augmentedQuery: augmentedQuery ?? null,
+      });
       const c3 = await Promise.race([
-        lookupByImage(img, { limit: 9, query: query1 }),
+        lookupByImage(img, {
+          limit: 9,
+          query: augmentedQuery || rawUserText || undefined,
+        }),
         new Promise<null>((_, rej) =>
           setTimeout(() => rej(new Error("timeout")), Math.min(RESEARCH_TIMEOUT_MS, 20_000)),
         ),
@@ -703,10 +716,22 @@ export async function processInboundMessage(input: ProcessInput): Promise<Proces
       if (storageUrls.length > 0) {
         const img = storageUrls[0];
         await saveMsg(draft.id, "out", "One sec — identifying the item…", [], []);
-        const q2 = trim(body);
-        const query2 = q2.length > 0 ? q2 : undefined;
+        const rawUserText = trim(body);
+        const augmentedQuery = await buildChannel3AugmentedQuery(
+          img,
+          rawUserText || undefined,
+        ).catch(() => rawUserText || undefined);
+        console.log("[channel3] tag/label lookup with augmentation", {
+          draftId: draft.id,
+          imageUrl: img,
+          rawUserText,
+          augmentedQuery: augmentedQuery ?? null,
+        });
         const c3 = await Promise.race([
-          lookupByImage(img, { limit: 9, query: query2 }),
+          lookupByImage(img, {
+            limit: 9,
+            query: augmentedQuery || rawUserText || undefined,
+          }),
           new Promise<null>((_, rej) =>
             setTimeout(() => rej(new Error("timeout")), RESEARCH_TIMEOUT_MS),
           ),
