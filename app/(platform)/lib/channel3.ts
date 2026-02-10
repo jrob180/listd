@@ -31,9 +31,13 @@ function getBaseUrl(): string {
 }
 
 /**
- * Identify product from image URL. Returns normalized result or null if missing/fails.
+ * Identify product from image URL (and optional text query).
+ * Returns normalized result or null if missing/fails.
  */
-export async function lookupByImage(imageUrl: string, opts?: { limit?: number }): Promise<Channel3Result | null> {
+export async function lookupByImage(
+  imageUrl: string,
+  opts?: { limit?: number; query?: string; context?: string },
+): Promise<Channel3Result | null> {
   const apiKey = process.env.CHANNEL3_API_KEY?.trim();
   if (!apiKey) {
     console.log("[channel3] missing CHANNEL3_API_KEY, skipping lookup for", imageUrl);
@@ -41,19 +45,24 @@ export async function lookupByImage(imageUrl: string, opts?: { limit?: number })
   }
 
   const limit = Math.max(1, Math.min(25, opts?.limit ?? 9));
+  const query = opts?.query && opts.query.trim().length > 0 ? opts.query.trim() : undefined;
+  const context = opts?.context && opts.context.trim().length > 0 ? opts.context.trim() : undefined;
   const base = getBaseUrl().replace(/\/$/, "");
   // Use /v0/search with image_url, as per https://docs.trychannel3.com/api-reference/channel3-api/search
   const url = `${base}/v0/search`;
 
   try {
-    console.log("[channel3] calling identify", { url, imageUrl });
+    console.log("[channel3] calling identify", { url, imageUrl, query, context });
+    const body: Record<string, unknown> = { image_url: imageUrl, limit };
+    if (query) body.query = query;
+    if (context) body.context = context;
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
       },
-      body: JSON.stringify({ image_url: imageUrl, limit }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(15000),
     });
     console.log("[channel3] identify response", { status: res.status, ok: res.ok });

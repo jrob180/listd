@@ -121,7 +121,7 @@ export default function MessageSection() {
                     </p>
                   </div>
                   {/* Messages */}
-                  <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-3">
+                  <div className="min-h-0 flex-1 px-2 py-3 flex flex-col justify-end space-y-1.5 overflow-hidden">
                     {messages.map((msg, i) => (
                       <motion.div
                         key={msg.id}

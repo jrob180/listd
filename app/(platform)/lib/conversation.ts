@@ -488,8 +488,10 @@ export async function processInboundMessage(input: ProcessInput): Promise<Proces
 
       await saveMsg(draft.id, "out", "One sec — identifying the item…", [], []);
       await setStage(draft.id, "researching_identity");
+      const q1 = trim(body);
+      const query1 = q1.length > 0 ? q1 : undefined;
       const c3 = await Promise.race([
-        lookupByImage(img, { limit: 9 }),
+        lookupByImage(img, { limit: 9, query: query1 }),
         new Promise<null>((_, rej) =>
           setTimeout(() => rej(new Error("timeout")), Math.min(RESEARCH_TIMEOUT_MS, 20_000)),
         ),
@@ -701,8 +703,10 @@ export async function processInboundMessage(input: ProcessInput): Promise<Proces
       if (storageUrls.length > 0) {
         const img = storageUrls[0];
         await saveMsg(draft.id, "out", "One sec — identifying the item…", [], []);
+        const q2 = trim(body);
+        const query2 = q2.length > 0 ? q2 : undefined;
         const c3 = await Promise.race([
-          lookupByImage(img, { limit: 9 }),
+          lookupByImage(img, { limit: 9, query: query2 }),
           new Promise<null>((_, rej) =>
             setTimeout(() => rej(new Error("timeout")), RESEARCH_TIMEOUT_MS),
           ),
