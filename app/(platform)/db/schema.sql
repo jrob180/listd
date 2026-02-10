@@ -16,7 +16,7 @@ create table if not exists listing_drafts (
     'awaiting_photos',
     'researching_identity',
     'confirm_identity',
-    'confirm_size',
+    'confirm_variants',
     'confirm_condition',
     'pricing',
     'final_confirm',

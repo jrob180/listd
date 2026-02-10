@@ -10,11 +10,13 @@ export function getSupabase() {
 export type SmsUser = { id: string; phone_number: string };
 
 export type PendingPrompt =
-  | { type: "confirm_identity"; proposedIdentity: string }
-  | { type: "confirm_size" }
-  | { type: "choose_condition"; suggested?: string }
-  | { type: "price_type" }
-  | { type: "floor_price" }
+  | { type: "confirm_identity"; suggested: string; meta?: Record<string, unknown> }
+  | { type: "choose_one"; choices: string[]; meta?: Record<string, unknown> }
+  | { type: "browse_alternatives"; choices: string[]; meta?: { index: number; source?: string; candidates?: { title: string; image_urls: string[] }[] } }
+  | { type: "ask_label_photo" }
+  | { type: "choose_variant"; variant_key: string; choices: string[]; meta?: Record<string, unknown> }
+  | { type: "choose_condition"; suggested?: string; choices: string[] }
+  | { type: "pricing"; step: "price_type" | "floor_price" }
   | { type: "final_confirm"; summary: string };
 
 export type ListingDraft = {

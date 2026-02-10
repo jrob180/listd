@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 
-export type ChoiceOption = { label: string; value: string };
+export type ChoiceOption = { label: string; value: string; images?: string[] };
 
 export type ChatInputProps = {
   onSend: (text: string, files?: File[]) => void;

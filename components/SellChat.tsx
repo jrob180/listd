@@ -24,7 +24,7 @@ export type MessageRow = {
   at: Date;
 };
 
-export type ChoiceOption = { label: string; value: string };
+export type ChoiceOption = { label: string; value: string; images?: string[] };
 
 export default function SellChat() {
   const [messages, setMessages] = useState<MessageRow[]>([]);
@@ -51,14 +51,35 @@ export default function SellChat() {
         .slice(0, 4)
         .map((f) => URL.createObjectURL(f));
 
-      const userMsg: MessageRow = {
-        id: `u-${Date.now()}`,
-        direction: "in",
-        body: trimmed || "(photo)",
-        imageUrls: localPreviews,
-        at: new Date(),
-      };
-      setMessages((prev) => [...prev, userMsg]);
+      const now = Date.now();
+      const hasText = !!trimmed;
+      const textMsg: MessageRow | null = hasText
+        ? {
+            id: `u-${now}-t`,
+            direction: "in",
+            body: trimmed,
+            imageUrls: [],
+            at: new Date(),
+          }
+        : null;
+      const imageMsg: MessageRow | null =
+        localPreviews.length > 0
+          ? {
+              id: `u-${now}-i`,
+              direction: "in",
+              body: "(photo)",
+              imageUrls: localPreviews,
+              at: new Date(),
+            }
+          : null;
+
+      const imageMsgId = imageMsg?.id;
+
+      setMessages((prev) => [
+        ...prev,
+        ...(textMsg ? [textMsg] : []),
+        ...(imageMsg ? [imageMsg] : []),
+      ]);
       setLoading(true);
 
       try {
@@ -82,11 +103,11 @@ export default function SellChat() {
 
         // If the API returned permanent storage URLs, replace the local previews
         // so images still work after refresh (and clean up object URLs).
-        if (uploaded.length > 0) {
+        if (uploaded.length > 0 && imageMsgId) {
           setMessages((prev) => {
             const next = [...prev];
             for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].id === userMsg.id) {
+              if (next[i].id === imageMsgId) {
                 localPreviews.forEach((u) => URL.revokeObjectURL(u));
                 next[i] = { ...next[i], imageUrls: uploaded };
                 break;
@@ -96,14 +117,39 @@ export default function SellChat() {
           });
         }
 
-        const botMsg: MessageRow = {
-          id: `b-${Date.now()}`,
+        // If the assistant returned choice previews (e.g. Channel3 candidates),
+        // show a carousel of images for the primary option only. Alternatives are
+        // browsed step‑by‑step, not shown all at once.
+        const primaryImages =
+          nextChoices && nextChoices[0] && Array.isArray(nextChoices[0].images)
+            ? nextChoices[0].images.filter(
+                (u: unknown) => typeof u === "string" && u.trim() !== "",
+              )
+            : [];
+        const botNow = Date.now();
+        const botTextMsg: MessageRow = {
+          id: `b-${botNow}-t`,
           direction: "out",
           body: reply,
           imageUrls: [],
           at: new Date(),
         };
-        setMessages((prev) => [...prev, botMsg]);
+        const botImageMsg: MessageRow | null =
+          primaryImages.length > 0
+            ? {
+                id: `b-${botNow}-i`,
+                direction: "out",
+                body: "(photo)",
+                imageUrls: primaryImages.slice(0, 5),
+                at: new Date(),
+              }
+            : null;
+
+        setMessages((prev) => [
+          ...prev,
+          botTextMsg,
+          ...(botImageMsg ? [botImageMsg] : []),
+        ]);
         setChoices(nextChoices);
       } catch {
         localPreviews.forEach((u) => URL.revokeObjectURL(u));
@@ -125,8 +171,8 @@ export default function SellChat() {
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto px-4 py-6">
+    <div className="flex h-full flex-col bg-[var(--bg)]">
+      <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-4 sm:py-6">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-4 py-12 text-center">
             <div className="rounded-full bg-[var(--accent-soft)] p-4">
@@ -157,6 +203,9 @@ export default function SellChat() {
               isUser={m.direction === "in"}
               imageUrls={m.imageUrls}
               timestamp={m.at}
+              onAllImagesFailed={
+                m.direction === "out" ? () => sendMessage("next") : undefined
+              }
             />
           ))}
           {loading && (
@@ -174,7 +223,7 @@ export default function SellChat() {
         </div>
         <div ref={bottomRef} />
       </div>
-      <div className="border-t border-[var(--border)] bg-[var(--bg)] p-4">
+      <div className="border-t border-[var(--border)] bg-[var(--bg)] p-3 sm:p-4">
         <div className="mx-auto max-w-2xl">
           <ChatInput
             onSend={sendMessage}

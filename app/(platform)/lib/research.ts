@@ -241,3 +241,11 @@ export async function runResearch(
     ebayStatus: ebayRun.status,
   };
 }
+
+/** Stub: return 0–2 alternative candidate titles for identity (e.g. from marketplace). Trivial to add later. */
+export async function getEbayCandidateTitlesForImage(
+  _imageUrl: string,
+  _draftId: string
+): Promise<string[]> {
+  return [];
+}
